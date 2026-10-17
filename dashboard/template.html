@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Game Match and Session Analytics</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"></script>
+<style>
+:root{color-scheme:light;--bg:#f4f3ef;--surface:#fcfcfb;--line:#e4e2dc;--text:#0b0b0b;--text2:#52514e;--muted:#8a8984;--s1:#2a78d6;--s2:#eb6834;--neutral:#c9c7c0;--grid:#ecebe6}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#111110;--surface:#1a1a19;--line:#2c2c2a;--text:#fff;--text2:#c3c2b7;--muted:#8f8e86;--s1:#3987e5;--s2:#d95926;--neutral:#4a4a46;--grid:#2a2a28}}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;padding:24px 16px 48px}
+.wrap{max-width:1120px;margin:0 auto}
+h1{font-size:22px;letter-spacing:-.01em;margin-bottom:4px}
+.sub{color:var(--text2);max-width:800px;margin-bottom:14px}
+.filters{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px;align-items:center}
+.filters label{font-size:12px;color:var(--text2);display:flex;gap:6px;align-items:center}
+select{background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:5px 8px;font:inherit}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.k-label{color:var(--text2);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.k-val{font-size:26px;font-weight:650;margin-top:2px;font-variant-numeric:tabular-nums}
+.k-note{color:var(--muted);font-size:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr));gap:12px}
+.card h2{font-size:14px;font-weight:650;margin-bottom:2px}
+.cap{color:var(--text2);font-size:12.5px;margin-bottom:6px}
+.chart{height:290px;width:100%}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--text2);margin:2px 0 4px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+footer{color:var(--muted);font-size:12px;margin-top:16px;max-width:900px}
+</style></head><body><div class="wrap">
+<h1>Do ratings predict matches, and does losing end a session?</h1>
+<div class="sub">An analysis of <b id="scale"></b> from a public Lichess sample. Match results are compared with the Elo formula. Sessions are runs of games by the same player with gaps under 30 minutes. Filters re-aggregate the raw cell counts in the browser; intervals are Wilson 95%.</div>
+<div class="filters">
+ <label>Speed <select id="fs"><option value="">All</option></select></label>
+ <label>Rated <select id="fr"><option value="">All</option></select></label>
+ <label>Rating band <select id="fb"><option value="">All</option></select></label>
+ <label>Players <select id="ft"><option value="">All</option></select></label>
+</div>
+<section class="kpis">
+ <div class="card"><div class="k-label">Stronger player wins</div><div class="k-val" id="k1"></div><div class="k-note" id="k1n"></div></div>
+ <div class="card"><div class="k-label">Play another game after a win</div><div class="k-val" id="k2"></div><div class="k-note" id="k2n"></div></div>
+ <div class="card"><div class="k-label">Play another game after a loss</div><div class="k-val" id="k3"></div><div class="k-note" id="k3n"></div></div>
+ <div class="card"><div class="k-label">Single game sessions</div><div class="k-val" id="k4"></div><div class="k-note" id="k4n"></div></div>
+</section>
+<section class="grid">
+ <div class="card"><h2>Stronger players win less often than Elo predicts</h2><p class="cap">Observed score of the higher rated player by rating gap, against the Elo expectation.</p>
+  <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>Observed (95% interval)</span><span><i class="sw" style="background:var(--neutral)"></i>Elo expected</span></div><div class="chart" id="c1"></div></div>
+ <div class="card"><h2>Continuation by last result</h2><p class="cap">Share of games followed by another game within 30 minutes.</p><div class="chart" id="c2"></div></div>
+ <div class="card"><h2>Continuation by matchup and result</h2><p class="cap">Underdog means rated 50+ points below the opponent.</p>
+  <div class="legend"><span><i class="sw" style="background:var(--s2)"></i>Loss</span><span><i class="sw" style="background:var(--neutral)"></i>Draw</span><span><i class="sw" style="background:var(--s1)"></i>Win</span></div><div class="chart" id="c3"></div></div>
+ <div class="card"><h2>Session length</h2><p class="cap">Share of sessions by number of games.</p><div class="chart" id="c4"></div></div>
+</section>
+<footer>Association, not causation. Sessions use only games with minute level timestamps. Active players (10+ games in the sample) are a proxy for players observed often, not all of their play. Data: Lichess games via TidyTuesday 2024-10-01. Code: github.com/satwik-kotta/game-session-analytics</footer>
+</div>
+<script>
+const R=__RES__, C=__CUBES__;
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const pct=(x,d=1)=>(x*100).toFixed(d)+'%', fmt=n=>Math.round(n).toLocaleString('en-US');
+const rows=o=>{const k=Object.keys(o);return o[k[0]].map((_,i)=>Object.fromEntries(k.map(c=>[c,o[c][i]])))};
+const M=rows(C.cube_match),N=rows(C.cube_continuation),S=rows(C.cube_sessions);
+const uniq=(a,k)=>[...new Set(a.map(r=>r[k]))].sort();
+const fill=(id,vals)=>vals.forEach(v=>{const o=document.createElement('option');o.value=v;o.textContent=v;document.getElementById(id).appendChild(o)});
+fill('fs',uniq(N,'speed').concat(uniq(M,'speed').filter(x=>!uniq(N,'speed').includes(x))));fill('fr',uniq(M,'rated'));fill('fb',['<1300','1300-1599','1600-1899','1900+']);fill('ft',uniq(N,'tier'));
+const F=()=>({s:fs.value,r:fr.value,b:fb.value,t:ft.value});
+const ok=(r,f,hasT)=>(!f.s||r.speed===f.s)&&(!f.r||r.rated===f.r)&&(!f.b||r.band===f.b)&&(!hasT||!f.t||r.tier===f.t);
+function wilson(k,n){if(!n)return[0,0,0];const z=1.96,p=k/n,d=1+z*z/n,c=(p+z*z/(2*n))/d,h=z*Math.sqrt(p*(1-p)/n+z*z/(4*n*n))/d;return[p,c-h,c+h]}
+const charts=['c1','c2','c3','c4'].map(id=>echarts.init(document.getElementById(id),null,{renderer:'svg'}));
+const base=()=>({textStyle:{fontFamily:'system-ui,sans-serif',color:css('--text2')},grid:{left:48,right:14,top:18,bottom:34},tooltip:{backgroundColor:css('--surface'),borderColor:css('--line'),textStyle:{color:css('--text')}}});
+const ax=data=>({type:'category',data,axisLine:{lineStyle:{color:css('--line')}},axisTick:{show:false},axisLabel:{color:css('--text2')}});
+const ay=(o={})=>({type:'value',axisLabel:{formatter:v=>Math.round(v*100)+'%',color:css('--text2')},splitLine:{lineStyle:{color:css('--grid')}},...o});
+const GB=['1-49','50-99','100-199','200-399','400+'];
+function render(){
+ const f=F(),s1=css('--s1'),s2=css('--s2'),ne=css('--neutral'),tx=css('--text');
+ const m=M.filter(r=>ok(r,f,false)),n=N.filter(r=>ok(r,f,true)),ss=S.filter(r=>(!f.b||r.band===f.b)&&(!f.t||r.tier===f.t));
+ const sum=(a,k)=>a.reduce((t,r)=>t+r[k],0);
+ const mb=GB.map(g=>{const a=m.filter(r=>r.gap_bucket===g),G=sum(a,'games'),w=sum(a,'stronger_wins'),d=sum(a,'draws');return{g,G,exp:G?sum(a,'expected_sum')/G:0,...(()=>{const [p,lo,hi]=wilson(w+d/2,G);return{p,lo,hi}})()}});
+ const tg=sum(m,'games'),[sp]=wilson(sum(m,'stronger_wins')+sum(m,'draws')/2,tg);
+ const cont=res=>{const a=n.filter(r=>r.result===res);return[sum(a,'continued'),sum(a,'games')]};
+ const [w,wn]=cont('Win'),[l,ln]=cont('Loss'),[wp,wlo,whi]=wilson(w,wn),[lp,llo,lhi]=wilson(l,ln);
+ k1.textContent=tg?pct(sp):'n/a';k1n.textContent=fmt(tg)+' games with a rating gap';
+ k2.textContent=wn?pct(wp):'n/a';k2n.textContent=fmt(wn)+' games · '+pct(wlo)+' to '+pct(whi);
+ k3.textContent=ln?pct(lp):'n/a';k3n.textContent=fmt(ln)+' games · '+pct(llo)+' to '+pct(lhi);
+ const sg=sum(ss,'sessions'),one=sum(ss.filter(r=>r.length==='1'),'sessions');
+ k4.textContent=sg?pct(one/sg):'n/a';k4n.textContent=fmt(sg)+' sessions';
+ charts[0].setOption({...base(),tooltip:{...base().tooltip,trigger:'axis'},xAxis:ax(GB),yAxis:ay({min:.4,max:1}),
+  series:[{name:'Elo expected',type:'bar',barGap:'10%',itemStyle:{color:ne,borderRadius:[3,3,0,0]},data:mb.map(b=>b.exp)},
+   {name:'Observed',type:'bar',itemStyle:{color:s1,borderRadius:[3,3,0,0]},data:mb.map(b=>b.G?b.p:null),
+    markLine:{silent:true,symbol:'none',data:[]}},
+   {type:'custom',silent:true,z:10,renderItem:(p,api)=>{const i=api.value(0),lo=api.coord([i,api.value(1)]),hi=api.coord([i,api.value(2)]),off=api.size([1,0])[0]*0.13;
+    return{type:'group',children:[{type:'line',shape:{x1:lo[0]+off,y1:lo[1],x2:hi[0]+off,y2:hi[1]},style:{stroke:tx,lineWidth:1.4}}]}},
+    encode:{x:0,y:[1,2]},data:mb.map((b,i)=>b.G?[i,b.lo,b.hi]:[i,0,0])}]},true);
+ const rs=['Win','Draw','Loss'];
+ charts[1].setOption({...base(),tooltip:{...base().tooltip,trigger:'axis',valueFormatter:v=>pct(v)},xAxis:ax(rs),yAxis:ay({min:.3,max:.7}),
+  series:[{type:'bar',barWidth:'45%',data:rs.map((r,i)=>{const[k,N0]=cont(r);return{value:N0?k/N0:null,itemStyle:{color:[s1,ne,s2][i],borderRadius:[4,4,0,0]}}}),
+   label:{show:true,position:'top',color:css('--text2'),formatter:p=>p.value==null?'':pct(p.value)}}]},true);
+ const mu=['Underdog','Even','Favorite'];
+ const ser=(r,c)=>({name:r,type:'bar',itemStyle:{color:c,borderRadius:[3,3,0,0]},data:mu.map(x=>{const a=n.filter(q=>q.result===r&&q.matchup===x),G=sum(a,'games');return G>=30?sum(a,'continued')/G:null})});
+ charts[2].setOption({...base(),tooltip:{...base().tooltip,trigger:'axis',valueFormatter:v=>pct(v)},xAxis:ax(mu),yAxis:ay({min:.3,max:.7}),series:[ser('Loss',s2),ser('Draw',ne),ser('Win',s1)]},true);
+ const L=['1','2','3','4','5','6-9','10+'];
+ charts[3].setOption({...base(),tooltip:{...base().tooltip,trigger:'axis',valueFormatter:v=>pct(v)},xAxis:ax(L),yAxis:ay(),
+  series:[{type:'bar',barWidth:'55%',itemStyle:{color:s1,borderRadius:[4,4,0,0]},data:L.map(x=>sg?sum(ss.filter(r=>r.length===x),'sessions')/sg:null)}]},true);
+}
+scale.textContent=fmt(R.data.games)+' games, '+fmt(R.data.players)+' players and '+fmt(R.data.sessions)+' sessions';
+[fs,fr,fb,ft].forEach(e=>e.addEventListener('change',render));
+render();addEventListener('resize',()=>charts.forEach(c=>c.resize()));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',render);
+</script></body></html>

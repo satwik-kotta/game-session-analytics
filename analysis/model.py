@@ -53,6 +53,35 @@ def after_loss(s):
             "odds_ratio_loss": float(np.exp(l.params.loss)), "odds_ratio_ci": np.exp(l.conf_int().loc["loss"]).tolist()}
 
 
+def by_matchup(s):
+    """Does the after-loss effect concentrate in favourites? Loss x matchup interaction, player fixed effects.
+
+    Raw cuts suggest a favourite who loses ends the session far more often than an underdog who loses.
+    This tests that directly: marginal effect of a loss within each matchup, standard errors clustered
+    by player, so each player is compared with themselves across the matchups they actually played.
+    """
+    d = s.copy()
+    d["mu"] = pd.Categorical(np.where(d.rating_diff <= -50, "Underdog",
+                                      np.where(d.rating_diff >= 50, "Favorite", "Even")),
+                             ["Even", "Favorite", "Underdog"])
+    f = smf.ols("cont ~ loss*C(mu) + draw + rd + lg + rt + rapid + C(player)", d).fit(
+        cov_type="cluster", cov_kwds={"groups": pd.factorize(d.player)[0]})
+    names, out = list(f.params.index), {}
+    for lev in ("Even", "Favorite", "Underdog"):
+        terms = ["loss"] + ([] if lev == "Even" else [f"loss:C(mu)[T.{lev}]"])
+        c = np.zeros(len(f.params))
+        for t in terms:
+            c[names.index(t)] = 1
+        est, se = float(c @ f.params), float(np.sqrt(c @ f.cov_params() @ c))
+        sub = d[d.mu == lev]
+        out[lev.lower()] = {
+            "n": int(len(sub)), "raw_after_win": float(sub[sub.score == 1].cont.mean()),
+            "raw_after_loss": float(sub[sub.score == 0].cont.mean()),
+            "fe_loss": est, "fe_loss_ci": [est - 1.96 * se, est + 1.96 * se]}
+    out["interaction_p"] = {lev.lower(): float(f.pvalues[f"loss:C(mu)[T.{lev}]"]) for lev in ("Favorite", "Underdog")}
+    return out
+
+
 def next_score(s):
     a = s[s.cont == 1].copy()
     a["ns"] = a.next_score; a["nrd"] = a.next_rating_diff / 100
@@ -68,7 +97,8 @@ def main():
     g = pd.read_sql("select * from games_clean", con)
     s = prep(pd.read_sql("select * from player_game_sessions where has_next", con))
     res = {"calibration": calibration(g), "after_loss_active": after_loss(s[s.active]),
-           "after_loss_all": after_loss(s), "next_game_score": next_score(s[s.active])}
+           "after_loss_all": after_loss(s), "next_game_score": next_score(s[s.active]),
+           "by_matchup_active": by_matchup(s[s.active])}
     sens = {}
     for k in (5, 10, 20):
         c = pd.read_sql(f"select player from player_activity where games_in_sample >= {k}", con).player

@@ -1,7 +1,7 @@
 import os, sys
 import numpy as np, pandas as pd, pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from analysis.model import elo_expected, calibration, after_loss, prep
+from analysis.model import elo_expected, calibration, after_loss, by_matchup, prep
 
 
 def test_elo_expected_known_values():
@@ -51,6 +51,35 @@ def test_after_loss_model_finds_a_planted_effect():
 def test_after_loss_model_finds_nothing_when_there_is_nothing():
     r = after_loss(synthetic_sessions(0.0))
     assert r["fe_loss_ci"][0] < 0 < r["fe_loss_ci"][1]
+
+
+def synthetic_matchup_sessions(favorite_effect, other_effect=0.0, n_players=200, per=50, seed=7):
+    """Sessions where a loss hurts continuation only when the player was the favourite."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for p in range(n_players):
+        base = rng.uniform(0.35, 0.7)
+        for g in range(per):
+            rd = rng.normal(0, 200)
+            score = rng.choice([0, 0.5, 1], p=[.45, .1, .45])
+            eff = 0.0 if score != 0 else (favorite_effect if rd >= 50 else other_effect)
+            rows.append(dict(player=f"p{p}", score=score, continued=rng.random() < base + eff, rating_diff=rd,
+                             game_no=g % 5 + 1, rated=bool(rng.random() < .6), speed=rng.choice(["Rapid", "Classical"])))
+    return prep(pd.DataFrame(rows))
+
+
+def test_by_matchup_isolates_a_favorite_only_effect():
+    r = by_matchup(synthetic_matchup_sessions(-0.20))
+    assert r["favorite"]["fe_loss_ci"][1] < -0.08           # favourites: clearly negative
+    assert r["underdog"]["fe_loss_ci"][0] < 0 < r["underdog"]["fe_loss_ci"][1]   # underdogs: nothing
+    assert r["interaction_p"]["favorite"] < 0.05            # the difference itself is detectable
+
+
+def test_by_matchup_finds_no_interaction_when_the_effect_is_uniform():
+    r = by_matchup(synthetic_matchup_sessions(-0.15, other_effect=-0.15))
+    assert all(p > 0.05 for p in r["interaction_p"].values())
+    for lev in ("even", "favorite", "underdog"):
+        assert r[lev]["fe_loss_ci"][1] < 0                  # the common effect still shows up everywhere
 
 
 def test_player_fixed_effects_remove_between_player_confounding():
